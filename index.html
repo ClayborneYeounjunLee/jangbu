@@ -327,6 +327,12 @@ button,.tab,.cal-cell,.pill,.seg-btn{ touch-action:manipulation; -webkit-user-se
           <div class="switch" id="set-dark"></div>
         </div>
       </div>
+      <div class="section-label" data-i18n="secRate">환율</div>
+      <div class="panel">
+        <div id="rate-info" style="font-size:13.5px;line-height:1.9"></div>
+        <button class="btn btn-ghost" id="btn-rate-refresh" style="margin-top:10px" data-i18n="rateRefresh">환율 새로고침</button>
+        <div class="hint" data-i18n="baseNote">기준 통화는 원화(₩) · 외화 기록은 환율로 환산돼 합계·분석에 반영돼요</div>
+      </div>
       <div class="section-label" data-i18n="secData">데이터</div>
       <div class="panel">
         <button class="btn btn-ghost" id="btn-export" style="margin-top:0" data-i18n="exportBtn">⬇ 데이터 내보내기 (백업)</button>
@@ -429,6 +435,48 @@ function wonShort(n){
   return sgn + a.toLocaleString("ko-KR");
 }
 
+/* ═════════ 통화 / 환율 (기준 = 원화 KRW) ═════════ */
+const CURS = ["KRW","USD","AUD","PHP"];
+const CUR_SYM = { KRW:"₩", USD:"$", AUD:"A$", PHP:"₱" };
+const CUR_NAME = { KRW:{ko:"원",en:"KRW"}, USD:{ko:"미국달러",en:"USD"}, AUD:{ko:"호주달러",en:"AUD"}, PHP:{ko:"필리핀페소",en:"PHP"} };
+const LS_RATES = "jangbu-rates";
+let rateKRW = { KRW:1, USD:1380, AUD:900, PHP:24 };   // 통화 1단위당 원화 (폴백 근사값, API로 덮어씀)
+let ratesMeta = { date:"", source:"fallback", ts:0 };
+const normAmt = (v, cur) => cur==="KRW" ? Math.max(0, Math.round(+v||0)) : Math.max(0, Math.round((+v||0)*100)/100);
+const toKRW = (amount, cur) => Math.round((+amount||0) * (rateKRW[cur||"KRW"] || 1));
+function fmtCur(amount, cur){
+  cur = cur || "KRW"; const sym = CUR_SYM[cur] || "";
+  const loc = L==="en" ? "en-US" : "ko-KR";
+  if (cur==="KRW") return sym + Math.round(+amount||0).toLocaleString(loc);
+  const n = Math.round((+amount||0)*100)/100;
+  return sym + (n % 1 === 0 ? n.toLocaleString(loc) : n.toLocaleString(loc,{minimumFractionDigits:2,maximumFractionDigits:2}));
+}
+const curLabel = c => `${CUR_SYM[c]} ${L==="en"?(CUR_NAME[c]?CUR_NAME[c].en:c):(CUR_NAME[c]?CUR_NAME[c].ko:c)}`;
+function loadRatesCache(){
+  try { const c = JSON.parse(localStorage.getItem(LS_RATES)); if (c && c.rateKRW && c.rateKRW.USD){ rateKRW = c.rateKRW; ratesMeta = c.meta || ratesMeta; } } catch(e){}
+}
+async function fetchRates(force){
+  if (!force && ratesMeta.ts && (Date.now() - ratesMeta.ts) < 12*3600*1000) return false;
+  const apply = (krwPerUsd, audPerUsd, phpPerUsd, src) => {
+    if (!krwPerUsd) return false;
+    rateKRW = { KRW:1, USD:krwPerUsd,
+      AUD: audPerUsd ? krwPerUsd/audPerUsd : rateKRW.AUD,
+      PHP: phpPerUsd ? krwPerUsd/phpPerUsd : rateKRW.PHP };
+    ratesMeta = { date: todayKey(), source: src, ts: Date.now() };
+    try { localStorage.setItem(LS_RATES, JSON.stringify({ rateKRW, meta: ratesMeta })); } catch(e){}
+    return true;
+  };
+  try {
+    const r = await (await fetch("https://open.er-api.com/v6/latest/USD")).json();
+    if (r && r.rates && r.rates.KRW) return apply(r.rates.KRW, r.rates.AUD, r.rates.PHP, "open.er-api.com");
+  } catch(e){}
+  try {
+    const r = await (await fetch("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json")).json();
+    if (r && r.usd && r.usd.krw) return apply(r.usd.krw, r.usd.aud, r.usd.php, "currency-api");
+  } catch(e){}
+  return false;
+}
+
 /* ═════════ 다국어 ═════════ */
 const LS_LANG = "jangbu-lang";
 let L = (localStorage.getItem(LS_LANG) === "en" || localStorage.getItem(LS_LANG) === "ko")
@@ -466,7 +514,11 @@ const T = {
     confirmReset:"모든 기록과 고정 항목을 초기화할까요? 되돌릴 수 없어요.",
     confirmDelTx:"이 기록을 삭제할까요?", confirmDelRule:"이 고정 항목을 삭제할까요?",
     loginFail:"로그인 실패: ", moduleFail:"네트워크 문제로 로그인 모듈을 못 불러왔어요. 새로고침 해주세요.",
-    nickDefault:"나의 장부", saved:"저장했어요 ✓", needAmount:"금액을 입력해 주세요"
+    nickDefault:"나의 장부", saved:"저장했어요 ✓", needAmount:"금액을 입력해 주세요",
+    curLabel:"통화", secRate:"환율", rateUpdated:"업데이트", rateRefresh:"환율 새로고침",
+    baseNote:"기준 통화는 원화(₩) · 외화 기록은 환율로 환산돼 합계·분석에 반영돼요",
+    rateRefreshing:"환율 받는 중…", rateDone:"환율을 갱신했어요 ✓", rateFail:"환율을 못 받아 캐시/근사값을 써요",
+    perUnit:"1", approxKRW:"약"
   },
   en: {
     loading:"Loading…",
@@ -499,7 +551,11 @@ const T = {
     confirmReset:"Reset all records and fixed items? This can't be undone.",
     confirmDelTx:"Delete this entry?", confirmDelRule:"Delete this fixed item?",
     loginFail:"Login failed: ", moduleFail:"Couldn't load the login module (network). Please refresh.",
-    nickDefault:"My Ledger", saved:"Saved ✓", needAmount:"Please enter an amount"
+    nickDefault:"My Ledger", saved:"Saved ✓", needAmount:"Please enter an amount",
+    curLabel:"Currency", secRate:"Exchange rate", rateUpdated:"Updated", rateRefresh:"Refresh rates",
+    baseNote:"Base currency is KRW (₩) · foreign entries are converted for totals & analysis",
+    rateRefreshing:"Fetching rates…", rateDone:"Rates updated ✓", rateFail:"Couldn't fetch rates — using cache/approx",
+    perUnit:"1", approxKRW:"≈"
   }
 };
 const tr = k => (T[L] && T[L][k] != null) ? T[L][k] : (T.ko[k] != null ? T.ko[k] : k);
@@ -550,17 +606,19 @@ function normalize(s){
   const cats = (s.cats && s.cats.in && s.cats.out) ? s.cats : d.cats;
   return {
     nick: s.nick || d.nick, created: s.created || d.created,
-    tx: Array.isArray(s.tx) ? s.tx.filter(t => t && t.date && (t.type==="in"||t.type==="out")).map(t => ({
-      id:t.id||uid7(), date:t.date, type:t.type, amount:Math.max(0,Math.round(+t.amount||0)),
-      cat:t.cat||(t.type==="in"?"etcIn":"etcOut"), memo:t.memo||""
-    })) : [],
-    recurring: Array.isArray(s.recurring) ? s.recurring.filter(r => r && (r.type==="in"||r.type==="out")).map(r => ({
-      id:r.id||uid7(), type:r.type, amount:Math.max(0,Math.round(+r.amount||0)),
-      cat:r.cat||(r.type==="in"?"etcIn":"etcOut"), memo:r.memo||"",
-      freq:(r.freq==="weekly"||r.freq==="yearly")?r.freq:"monthly",
-      dom:clamp(+r.dom||1,1,31), dow:clamp(+r.dow||1,0,6), mon:clamp(+r.mon||1,1,12),
-      start:r.start||"", end:r.end||""
-    })) : [],
+    tx: Array.isArray(s.tx) ? s.tx.filter(t => t && t.date && (t.type==="in"||t.type==="out")).map(t => {
+      const cur = CURS.includes(t.cur) ? t.cur : "KRW";
+      return { id:t.id||uid7(), date:t.date, type:t.type, cur, amount:normAmt(t.amount,cur),
+        cat:t.cat||(t.type==="in"?"etcIn":"etcOut"), memo:t.memo||"" };
+    }) : [],
+    recurring: Array.isArray(s.recurring) ? s.recurring.filter(r => r && (r.type==="in"||r.type==="out")).map(r => {
+      const cur = CURS.includes(r.cur) ? r.cur : "KRW";
+      return { id:r.id||uid7(), type:r.type, cur, amount:normAmt(r.amount,cur),
+        cat:r.cat||(r.type==="in"?"etcIn":"etcOut"), memo:r.memo||"",
+        freq:(r.freq==="weekly"||r.freq==="yearly")?r.freq:"monthly",
+        dom:clamp(+r.dom||1,1,31), dow:clamp(+r.dow||1,0,6), mon:clamp(+r.mon||1,1,12),
+        start:r.start||"", end:r.end||"" };
+    }) : [],
     cats
   };
 }
@@ -604,30 +662,30 @@ function freqDesc(r){
 function entriesForDate(dk){
   const d = parseKey(dk); const out = [];
   for (const t of state.tx) if (t.date === dk) out.push({ ...t, rec:false });
-  for (const r of state.recurring) if (ruleHitsDate(r, d)) out.push({ id:"r:"+r.id, ruleId:r.id, date:dk, type:r.type, amount:r.amount, cat:r.cat, memo:r.memo, rec:true });
+  for (const r of state.recurring) if (ruleHitsDate(r, d)) out.push({ id:"r:"+r.id, ruleId:r.id, date:dk, type:r.type, cur:r.cur, amount:r.amount, cat:r.cat, memo:r.memo, rec:true });
   return out;
 }
 function dayTotals(dk){
   let inc=0, exp=0;
-  for (const e of entriesForDate(dk)){ if (e.type==="in") inc+=e.amount; else exp+=e.amount; }
+  for (const e of entriesForDate(dk)){ const v = toKRW(e.amount, e.cur); if (e.type==="in") inc+=v; else exp+=v; }
   return { in:inc, out:exp, net:inc-exp };
 }
 
 /* 기간 집계: [fromKey, toKey] 포함 */
 function aggregate(fromKey, toKey){
   const res = { in:0, out:0, catIn:{}, catOut:{}, days:{} };
-  const add = (dk, type, amt, cat) => {
-    amt = +amt||0;
+  const add = (dk, type, amt, cat, cur) => {
+    amt = toKRW(amt, cur);
     if (type==="in"){ res.in+=amt; res.catIn[cat]=(res.catIn[cat]||0)+amt; }
     else { res.out+=amt; res.catOut[cat]=(res.catOut[cat]||0)+amt; }
     const dd = res.days[dk] || (res.days[dk]={in:0,out:0});
     dd[type]+=amt;
   };
-  for (const t of state.tx) if (t.date >= fromKey && t.date <= toKey) add(t.date, t.type, t.amount, t.cat);
+  for (const t of state.tx) if (t.date >= fromKey && t.date <= toKey) add(t.date, t.type, t.amount, t.cat, t.cur);
   const end = parseKey(toKey);
   for (let d = parseKey(fromKey); d <= end; d.setDate(d.getDate()+1)){
     const dk = dateKey(d);
-    for (const r of state.recurring) if (ruleHitsDate(r, d)) add(dk, r.type, r.amount, r.cat);
+    for (const r of state.recurring) if (ruleHitsDate(r, d)) add(dk, r.type, r.amount, r.cat, r.cur);
   }
   res.net = res.in - res.out;
   return res;
@@ -649,8 +707,15 @@ function showTab(name){
   if (name==="calendar") renderCalendar();
   else if (name==="recurring") renderRecurring();
   else if (name==="analysis") renderAnalysis();
-  else if (name==="settings") renderProfile();
+  else if (name==="settings"){ renderProfile(); renderRates(); }
   window.scrollTo(0,0);
+}
+function rerenderCurrent(){
+  if (!state) return;
+  if (curTab==="calendar") renderCalendar();
+  else if (curTab==="recurring") renderRecurring();
+  else if (curTab==="analysis") renderAnalysis();
+  else if (curTab==="settings") renderRates();
 }
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
 
@@ -708,7 +773,7 @@ function openDaySheet(dk){
       return `<div class="day-line" data-id="${esc(e.id)}" ${e.rec?`data-rule="${esc(e.ruleId)}"`:''}>
         <div class="emoji">${c.emoji}</div>
         <div class="info"><div class="ttl">${esc(catName(c))}${e.memo?` · <span style="color:var(--sub);font-weight:500">${esc(e.memo)}</span>`:''}${e.rec?` <span class="badge">${tr("recBadge")}</span>`:''}</div></div>
-        <div class="v ${e.type==="in"?'in':'out'}">${e.type==="in"?'+':'-'}${won(e.amount)}</div></div>`;
+        <div class="v ${e.type==="in"?'in':'out'}" style="text-align:right">${e.type==="in"?'+':'-'}${fmtCur(e.amount,e.cur)}${(e.cur&&e.cur!=="KRW")?`<div style="font-size:10.5px;color:var(--sub);font-weight:600">${tr("approxKRW")} ${won(toKRW(e.amount,e.cur))}</div>`:''}</div></div>`;
     }).join("") + `</div>`;
     const sumLine = `<div style="display:flex;gap:14px;font-size:13px;margin:2px 2px 14px">
       <span class="in">${tr("income")} +${won(t.in)}</span>
@@ -733,20 +798,30 @@ function catPills(type, selId){
     `<button type="button" class="pill ${c.id===selId?'on':''}" data-c="${c.id}">${c.emoji} ${esc(catName(c))}</button>`).join("")}
     <button type="button" class="pill pill-add" id="f-cat-add">＋</button></div>`;
 }
+function curPills(domId, sel){
+  return `<div class="pill-row" id="${domId}">${CURS.map(c =>
+    `<button type="button" class="pill ${c===sel?'on':''}" data-cur="${c}">${curLabel(c)}</button>`).join("")}</div>`;
+}
 function openTxSheet(dk, tx){
   const isNew = !tx;
-  const e = tx || { id:uid7(), date:dk, type:"out", amount:"", cat:"etcOut", memo:"" };
-  let type = e.type, cat = e.cat;
+  const e = tx || { id:uid7(), date:dk, type:"out", amount:"", cat:"etcOut", memo:"", cur:"KRW" };
+  let type = e.type, cat = e.cat, cur = e.cur || "KRW";
   openSheet(`<h3>${isNew?tr("txAdd"):tr("txEdit")}</h3>
     <div class="field"><label>${tr("fType")}</label><div class="seg" id="f-type">
       <button type="button" class="seg-btn ${type==="out"?'on':''}" data-v="out">${tr("typeOut")}</button>
       <button type="button" class="seg-btn ${type==="in"?'on':''}" data-v="in">${tr("typeIn")}</button></div></div>
-    <div class="field"><label>${tr("fAmount")}</label><input class="input amount-in" id="f-amt" type="number" inputmode="numeric" min="0" step="1" value="${e.amount}" placeholder="0"></div>
+    <div class="field"><label>${tr("curLabel")}</label>${curPills("f-cur", cur)}</div>
+    <div class="field"><label>${tr("fAmount")}</label><input class="input amount-in" id="f-amt" type="number" inputmode="decimal" min="0" step="0.01" value="${e.amount}" placeholder="0">
+      <div class="hint" id="f-krw" style="text-align:right"></div></div>
     <div class="field"><label>${tr("fCat")}</label><div id="f-cat-wrap">${catPills(type, cat)}</div></div>
     <div class="field"><label>${tr("fMemo")}</label><input class="input" id="f-memo" value="${esc(e.memo)}" placeholder="${tr("phMemo")}"></div>
     <div class="field"><label>${tr("fDate")}</label><input class="input" id="f-date" type="date" value="${e.date}"></div>
     <button class="btn btn-accent" id="f-save">${tr("save")}</button>
     ${isNew?"":`<div class="del-link" id="f-del">${tr("del")}</div>`}`, () => {
+    const updatePreview = () => {
+      const v = +$("f-amt").value || 0;
+      $("f-krw").textContent = (cur!=="KRW" && v>0) ? `${tr("approxKRW")} ${won(toKRW(v,cur))}` : "";
+    };
     const bindCat = () => {
       $("f-cat").querySelectorAll(".pill[data-c]").forEach(b => b.addEventListener("click", () => {
         cat = b.dataset.c; $("f-cat").querySelectorAll(".pill").forEach(x => x.classList.toggle("on", x===b));
@@ -758,17 +833,21 @@ function openTxSheet(dk, tx){
         $("f-cat-wrap").innerHTML = catPills(type, cat); bindCat();
       });
     };
+    $("f-cur").querySelectorAll(".pill[data-cur]").forEach(b => b.addEventListener("click", () => {
+      cur = b.dataset.cur; $("f-cur").querySelectorAll(".pill").forEach(x => x.classList.toggle("on", x===b)); updatePreview();
+    }));
     $("f-type").querySelectorAll(".seg-btn").forEach(b => b.addEventListener("click", () => {
       type = b.dataset.v; $("f-type").querySelectorAll(".seg-btn").forEach(x => x.classList.toggle("on", x===b));
       cat = type==="in" ? "etcIn" : "etcOut";
       $("f-cat-wrap").innerHTML = catPills(type, cat); bindCat();
     }));
     bindCat();
+    $("f-amt").addEventListener("input", updatePreview); updatePreview();
     $("f-amt").focus();
     $("f-save").addEventListener("click", () => {
-      const amt = Math.round(+$("f-amt").value || 0);
+      const amt = normAmt($("f-amt").value, cur);
       if (amt <= 0){ toast(tr("needAmount")); $("f-amt").focus(); return; }
-      const out = { id:e.id, date:$("f-date").value || dk, type, amount:amt, cat, memo:$("f-memo").value.trim() };
+      const out = { id:e.id, date:$("f-date").value || dk, type, cur, amount:amt, cat, memo:$("f-memo").value.trim() };
       if (isNew) state.tx.push(out);
       else { const i = state.tx.findIndex(x=>x.id===e.id); if (i>=0) state.tx[i]=out; }
       save(); toast(tr("saved")); afterEdit(out.date);
@@ -795,14 +874,15 @@ function renderRecurring(){
   let pin=0, pout=0;
   const end = parseKey(tk);
   for (let d=parseKey(fk); d<=end; d.setDate(d.getDate()+1))
-    for (const r of state.recurring) if (ruleHitsDate(r,d)){ if (r.type==="in") pin+=r.amount; else pout+=r.amount; }
+    for (const r of state.recurring) if (ruleHitsDate(r,d)){ const v=toKRW(r.amount,r.cur); if (r.type==="in") pin+=v; else pout+=v; }
   $("proj-in").textContent = won(pin); $("proj-out").textContent = won(pout);
   const rowHtml = r => {
     const c = findCat(r.type, r.cat);
+    const sub = freqDesc(r) + (r.cur && r.cur!=="KRW" ? ` · ${tr("approxKRW")} ${won(toKRW(r.amount,r.cur))}` : "");
     return `<div class="item" data-id="${esc(r.id)}">
       <div class="emoji">${c.emoji}</div>
-      <div class="meta"><div class="nm">${esc(r.memo || catName(c))}</div><div class="sub">${freqDesc(r)}</div></div>
-      <div class="amt ${r.type==="in"?'in':'out'}">${r.type==="in"?'+':'-'}${won(r.amount)}</div></div>`;
+      <div class="meta"><div class="nm">${esc(r.memo || catName(c))}</div><div class="sub">${sub}</div></div>
+      <div class="amt ${r.type==="in"?'in':'out'}">${r.type==="in"?'+':'-'}${fmtCur(r.amount,r.cur)}</div></div>`;
   };
   const ins = state.recurring.filter(r=>r.type==="in");
   const outs = state.recurring.filter(r=>r.type==="out");
@@ -817,12 +897,14 @@ $("btn-add-rule").addEventListener("click", () => openRuleSheet());
 function openRuleSheet(rule){
   const isNew = !rule;
   const e = rule || { id:uid7(), type:"out", amount:"", cat:"subscribe", memo:"", freq:"monthly", dom:1, dow:1, mon:1, start:"", end:"" };
-  let type=e.type, cat=e.cat, freq=e.freq, dom=e.dom, dow=e.dow, mon=e.mon;
+  let type=e.type, cat=e.cat, freq=e.freq, dom=e.dom, dow=e.dow, mon=e.mon, cur=e.cur||"KRW";
   openSheet(`<h3>${isNew?tr("ruleAdd"):tr("ruleEdit")}</h3>
     <div class="field"><label>${tr("fType")}</label><div class="seg" id="r-type">
       <button type="button" class="seg-btn ${type==="out"?'on':''}" data-v="out">${tr("typeOut")}</button>
       <button type="button" class="seg-btn ${type==="in"?'on':''}" data-v="in">${tr("typeIn")}</button></div></div>
-    <div class="field"><label>${tr("fAmount")}</label><input class="input amount-in" id="r-amt" type="number" inputmode="numeric" min="0" step="1" value="${e.amount}" placeholder="0"></div>
+    <div class="field"><label>${tr("curLabel")}</label>${curPills("r-cur", cur)}</div>
+    <div class="field"><label>${tr("fAmount")}</label><input class="input amount-in" id="r-amt" type="number" inputmode="decimal" min="0" step="0.01" value="${e.amount}" placeholder="0">
+      <div class="hint" id="r-krw" style="text-align:right"></div></div>
     <div class="field"><label>${tr("fMemo")}</label><input class="input" id="r-memo" value="${esc(e.memo)}" placeholder="${L==='ko'?'예: 넷플릭스, 청약 적금…':'e.g. Netflix, savings…'}"></div>
     <div class="field"><label>${tr("fCat")}</label><div id="r-cat-wrap">${catPills(type, cat)}</div></div>
     <div class="field"><label>${tr("fFreq")}</label><div class="seg" id="r-freq">
@@ -845,6 +927,13 @@ function openRuleSheet(rule){
         $("r-cat-wrap").innerHTML = catPills(type, cat); bindCat();
       });
     };
+    const updatePreview = () => {
+      const v = +$("r-amt").value || 0;
+      $("r-krw").textContent = (cur!=="KRW" && v>0) ? `${tr("approxKRW")} ${won(toKRW(v,cur))}` : "";
+    };
+    $("r-cur").querySelectorAll(".pill[data-cur]").forEach(b => b.addEventListener("click", () => {
+      cur = b.dataset.cur; $("r-cur").querySelectorAll(".pill").forEach(x => x.classList.toggle("on", x===b)); updatePreview();
+    }));
     const renderWhen = () => {
       const w = $("r-when");
       if (freq==="weekly"){
@@ -872,11 +961,11 @@ function openRuleSheet(rule){
     $("r-freq").querySelectorAll(".seg-btn").forEach(b => b.addEventListener("click", () => {
       freq=b.dataset.v; $("r-freq").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("on",x===b)); renderWhen();
     }));
-    bindCat(); renderWhen();
+    bindCat(); renderWhen(); $("r-amt").addEventListener("input", updatePreview); updatePreview();
     $("r-save").addEventListener("click", () => {
-      const amt = Math.round(+$("r-amt").value || 0);
+      const amt = normAmt($("r-amt").value, cur);
       if (amt<=0){ toast(tr("needAmount")); $("r-amt").focus(); return; }
-      const out = { id:e.id, type, amount:amt, cat, memo:$("r-memo").value.trim(), freq, dom:clamp(dom,1,31), dow:clamp(dow,0,6), mon:clamp(mon,1,12), start:$("r-start").value||"", end:$("r-end").value||"" };
+      const out = { id:e.id, type, cur, amount:amt, cat, memo:$("r-memo").value.trim(), freq, dom:clamp(dom,1,31), dow:clamp(dow,0,6), mon:clamp(mon,1,12), start:$("r-start").value||"", end:$("r-end").value||"" };
       if (isNew) state.recurring.push(out);
       else { const i=state.recurring.findIndex(x=>x.id===e.id); if (i>=0) state.recurring[i]=out; }
       save(); toast(tr("saved")); closeSheet(); if (curTab==="recurring") renderRecurring(); if (curTab==="calendar") renderCalendar();
@@ -975,6 +1064,19 @@ function renderProfile(){
 $("set-dark").addEventListener("click", () => setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark"));
 $("set-lang").addEventListener("click", () => applyLang(L==="en"?"ko":"en"));
 
+function renderRates(){
+  const info = $("rate-info"); if (!info) return;
+  const rows = ["USD","AUD","PHP"].map(c => `${curLabel(c)} 1 = <b>${won(rateKRW[c])}</b>`).join("<br>");
+  const upd = ratesMeta.date ? `${tr("rateUpdated")}: ${ratesMeta.date}${ratesMeta.source&&ratesMeta.source!=="fallback"?` · ${ratesMeta.source}`:""}` : "";
+  info.innerHTML = rows + (upd ? `<div style="color:var(--sub);font-size:11.5px;margin-top:7px">${upd}</div>` : "");
+}
+$("btn-rate-refresh").addEventListener("click", async () => {
+  toast(tr("rateRefreshing"));
+  const ok = await fetchRates(true);
+  renderRates(); rerenderCurrent();
+  toast(ok ? tr("rateDone") : tr("rateFail"));
+});
+
 $("btn-export").addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(state,null,2)], {type:"application/json"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
@@ -1068,7 +1170,8 @@ $("btn-google").addEventListener("click", async () => {
 });
 
 /* ═════════ 초기화 ═════════ */
-showLoading(); applyLang(L);
+showLoading(); loadRatesCache(); applyLang(L);
+fetchRates().then(updated => { if (updated){ rerenderCurrent(); } });
 (async () => {
   const ok = await initFirebase();
   if (ok){
