@@ -743,8 +743,11 @@ function renderCalendar(){
     }
     const hasRec = entriesForDate(dk).some(e => e.rec);
     let amt = "";
-    if (t.in>0)  amt += `<div class="amt in">+${wonShort(t.in)}</div>`;
-    if (t.out>0) amt += `<div class="amt out">-${wonShort(t.out)}</div>`;
+    if (t.in>0 || t.out>0){
+      const cls = t.net>=0 ? "in" : "out";
+      const sign = t.net>0 ? "+" : "";   // 음수 부호는 wonShort가 이미 포함
+      amt = `<div class="amt ${cls}">${sign}${wonShort(t.net)}</div>`;
+    }
     html += `<button class="cal-cell ${wd===0?'sun':wd===6?'sat':''} ${dk===tk?'today':''}" data-dk="${dk}" style="${tint}">
       <div class="dn">${d}</div>${hasRec?'<span class="rec-dot">🔁</span>':''}${amt}</button>`;
   }
